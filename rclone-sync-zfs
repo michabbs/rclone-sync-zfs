@@ -1,0 +1,130 @@
+#!/bin/bash
+# rclone-sync-zfs 1.0.0
+# Copyright (c) 2021, Przemyslaw Kwiatkowski
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+#    contributors may be used to endorse or promote products derived from
+#    this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+
+# Whis wrapper script creates a snapshot of a given ZFS dataset and calls rclone
+# to sync it with a remote folder. Snapshots might be resursive.
+# Because of snaphot - the created clone is always consistent. No data might change
+# during synchronization process.
+
+# Note:
+# Because of need to create/destoy snapshot and mount/umount it - this script is be run as root!
+
+## USAGE
+#
+# rclone-sync-zfs source_dataset rclone_destination
+
+# Example:
+# rclone-sync-zfs mypool/mydataset remote:folder
+
+
+## CONFIGURATION
+
+# Do you want to sync sub-datasets too?
+#RECURSIVE=1
+
+# Extra "rclone sync" options:
+#EXTRA_OPTS="--create-empty-src-dirs"
+
+
+#
+# Do not edit beyond this point. :-)
+
+SOURCE="$1"
+DEST="$2"
+
+NECESSARY_EXECUTABLES="grep mount sed umount zfs"
+if ! which $NECESSARY_EXECUTABLES >/dev/null 2>&1; then
+    echo "Missing binaries!" >&2
+    echo "Make sure these tools are available: $NECESSARY_EXECUTABLES" >&2
+    exit 255
+fi
+
+function destroy_snapshot() {
+    echo -n "Destoying snapshot... " >&2
+    local OPT=
+    [ "$RECURSIVE" = "1" ] && OPT="-r"
+    umount -R "$TMP_DIR"
+    if ( ! zfs destroy $OPT "$SOURCE@$SNAPNAME"); then
+	echo "fail" >&2
+	return 1
+    fi
+    echo "done" >&2
+    return 0
+}
+
+function recursive_mount() {
+    if ( ! mount -t zfs "$SOURCE@$SNAPNAME" "$TMP_DIR" ); then
+	return 1
+    fi
+    [ "$RECURSIVE" != "1" ] && return 0
+    local A
+    for A in `zfs list -Hr -t snapshot -o name $SOURCE|grep "@$SNAPNAME$"|sed -e "s@^$SOURCE@@" -e "s/@$SNAPNAME$//"`; do 
+	mount -t zfs "$SOURCE$A@$SNAPNAME" "$TMP_DIR$A" || return 1
+    done
+    return 0
+}
+
+function create_snapshot() {
+    echo -n "Creating snapshot... " >&2
+    local OPT=
+    [ "$RECURSIVE" = "1" ] && OPT="-r"
+    if ( ! zfs snapshot $OPT "$SOURCE@$SNAPNAME" ); then
+	echo "fail" >&2
+	return 1
+    fi
+    if ( ! recursive_mount ); then
+	echo "error mounting snapshot" >&2
+	destroy_snapshot
+	return 1
+    fi
+    echo "done" >&2
+    return 0
+}
+
+#
+
+[ -z "$SNAPNAME" ] && SNAPNAME=`date +rc%s`
+[ "$RECURSIVE" != "1" ] && RECURSIVE=0
+
+TMP_DIR=$(mktemp -d -t rclone-sync-zfs-XXXXXXXXXX)
+if [ ! -d "$TMP_DIR" ]; then
+    echo "Error: unable to create tmpdir." >&2
+    exit 1
+fi
+
+create_snapshot || exit 1
+echo "[rclone begin]" >&2
+rclone sync $EXTRA_OPTS $TMP_DIR $DEST
+ERR="$?"
+echo "[rclone end]" >&2
+destroy_snapshot
+rm -d "$TMP_DIR"
+exit $ERR

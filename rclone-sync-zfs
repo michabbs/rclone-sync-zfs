@@ -35,7 +35,7 @@
 # during synchronization process.
 
 # Note:
-# Because of need to create/destoy snapshot and mount/umount it - this script is to be run as root!
+# Because of need to create/destroy snapshot and mount/umount it - this script is to be run as root!
 
 ## USAGE
 #
@@ -68,7 +68,7 @@ if ! which $NECESSARY_EXECUTABLES >/dev/null 2>&1; then
 fi
 
 function destroy_snapshot() {
-    echo -n "Destoying snapshot... " >&2
+    echo -n "Destroying snapshot... " >&2
     local OPT=
     [ "$RECURSIVE" = "1" ] && OPT="-r"
     umount -R "$TMP_DIR"

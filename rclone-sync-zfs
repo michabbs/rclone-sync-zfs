@@ -60,7 +60,7 @@
 SOURCE="$1"
 DEST="$2"
 
-NECESSARY_EXECUTABLES="grep mount sed umount zfs"
+NECESSARY_EXECUTABLES="grep mount sed umount zfs rclone"
 if ! which $NECESSARY_EXECUTABLES >/dev/null 2>&1; then
     echo "Missing binaries!" >&2
     echo "Make sure these tools are available: $NECESSARY_EXECUTABLES" >&2
